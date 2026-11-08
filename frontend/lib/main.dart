@@ -17,11 +17,27 @@ class SchedulAIApp extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    final themeMode = context.select<CalendarProvider, ThemeMode>((p) => p.themeMode);
+
     return MaterialApp(
-      title: 'SchedulAI - Quản lý Lịch tuần',
+      title: 'SchedulAI - Quản lý Lịch tuần AI',
       debugShowCheckedModeBanner: false,
+      themeMode: themeMode,
       theme: ThemeData(
-        colorScheme: ColorScheme.fromSeed(seedColor: Colors.indigo),
+        brightness: Brightness.light,
+        colorScheme: ColorScheme.fromSeed(
+          seedColor: const Color(0xFF2563EB),
+          brightness: Brightness.light,
+        ),
+        useMaterial3: true,
+        fontFamily: 'Segoe UI',
+      ),
+      darkTheme: ThemeData(
+        brightness: Brightness.dark,
+        colorScheme: ColorScheme.fromSeed(
+          seedColor: const Color(0xFF3B82F6),
+          brightness: Brightness.dark,
+        ),
         useMaterial3: true,
         fontFamily: 'Segoe UI',
       ),

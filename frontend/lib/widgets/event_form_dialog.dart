@@ -1,7 +1,6 @@
 import 'package:flutter/material.dart';
 import 'package:intl/intl.dart';
 import 'package:provider/provider.dart';
-import '../core/app_colors.dart';
 import '../models/event_model.dart';
 import '../providers/calendar_provider.dart';
 
@@ -20,66 +19,63 @@ class EventFormDialog extends StatefulWidget {
 }
 
 class _EventFormDialogState extends State<EventFormDialog> {
-  late TextEditingController _titleController;
-  late TextEditingController _descController;
-  late DateTime _startTime;
-  late DateTime _endTime;
+  late TextEditingController _titleCtrl;
+  late TextEditingController _descCtrl;
+  late DateTime _start;
+  late DateTime _end;
   late String _category;
-  String? _errorMessage;
-  bool _isSubmitting = false;
+  String? _errorMsg;
+  bool _submitting = false;
 
   bool get isEditing => widget.existingEvent != null;
 
   @override
   void initState() {
     super.initState();
-    final existing = widget.existingEvent;
-    _titleController = TextEditingController(text: existing?.title ?? '');
-    _descController = TextEditingController(text: existing?.description ?? '');
-    _startTime = existing?.startTime ?? widget.initialStartTime ?? DateTime.now();
-    _endTime = existing?.endTime ?? _startTime.add(const Duration(hours: 1));
-    _category = existing?.category ?? 'Công việc';
+    final e = widget.existingEvent;
+    final cats = context.read<CalendarProvider>().categories;
+    _titleCtrl = TextEditingController(text: e?.title ?? '');
+    _descCtrl = TextEditingController(text: e?.description ?? '');
+    _start = e?.startTime ?? widget.initialStartTime ?? DateTime.now();
+    _end = e?.endTime ?? _start.add(const Duration(hours: 1));
+    _category = e?.category ?? cats.first.name;
   }
 
   Future<void> _pickDateTime(bool isStart) async {
-    final initial = isStart ? _startTime : _endTime;
-    final date = await showDatePicker(
+    final init = isStart ? _start : _end;
+    final d = await showDatePicker(
       context: context,
-      initialDate: initial,
+      initialDate: init,
       firstDate: DateTime(2024),
       lastDate: DateTime(2030),
     );
-    if (date == null || !mounted) return;
-
-    final time = await showTimePicker(
+    if (d == null || !mounted) return;
+    final t = await showTimePicker(
       context: context,
-      initialTime: TimeOfDay.fromDateTime(initial),
+      initialTime: TimeOfDay.fromDateTime(init),
     );
-    if (time == null) return;
+    if (t == null) return;
 
     setState(() {
-      final selected = DateTime(date.year, date.month, date.day, time.hour, time.minute);
+      final dt = DateTime(d.year, d.month, d.day, t.hour, t.minute);
       if (isStart) {
-        _startTime = selected;
-        if (_endTime.isBefore(_startTime)) {
-          _endTime = _startTime.add(const Duration(hours: 1));
-        }
+        _start = dt;
+        if (_end.isBefore(_start)) _end = _start.add(const Duration(hours: 1));
       } else {
-        _endTime = selected;
+        _end = dt;
       }
-      _errorMessage = null;
+      _errorMsg = null;
     });
   }
 
-  Future<void> _submitForm() async {
-    if (_titleController.text.trim().isEmpty) {
-      setState(() => _errorMessage = 'Vui lòng nhập tên sự kiện!');
+  Future<void> _save() async {
+    if (_titleCtrl.text.trim().isEmpty) {
+      setState(() => _errorMsg = 'Vui lòng nhập tiêu đề sự kiện!');
       return;
     }
-
     setState(() {
-      _isSubmitting = true;
-      _errorMessage = null;
+      _submitting = true;
+      _errorMsg = null;
     });
 
     final provider = context.read<CalendarProvider>();
@@ -87,50 +83,47 @@ class _EventFormDialogState extends State<EventFormDialog> {
       if (isEditing) {
         await provider.editEvent(
           id: widget.existingEvent!.id,
-          title: _titleController.text.trim(),
-          startTime: _startTime,
-          endTime: _endTime,
+          title: _titleCtrl.text.trim(),
+          startTime: _start,
+          endTime: _end,
           category: _category,
-          description: _descController.text.trim(),
+          description: _descCtrl.text.trim(),
         );
       } else {
         await provider.addNewEvent(
-          title: _titleController.text.trim(),
-          startTime: _startTime,
-          endTime: _endTime,
+          title: _titleCtrl.text.trim(),
+          startTime: _start,
+          endTime: _end,
           category: _category,
-          description: _descController.text.trim(),
+          description: _descCtrl.text.trim(),
         );
       }
       if (mounted) Navigator.pop(context);
     } catch (e) {
-      // Hiển thị lỗi trùng lịch trả về từ Backend FastAPI ngay trên Dialog
-      setState(() {
-        _errorMessage = e.toString().replaceAll('Exception: ', '');
-      });
+      setState(() => _errorMsg = e.toString().replaceAll('Exception: ', ''));
     } finally {
-      if (mounted) setState(() => _isSubmitting = false);
+      if (mounted) setState(() => _submitting = false);
     }
   }
 
   @override
   Widget build(BuildContext context) {
+    final categories = context.watch<CalendarProvider>().categories;
+
     return AlertDialog(
-      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(14)),
+      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
       title: Text(
         isEditing ? 'Chỉnh sửa Sự kiện' : 'Tạo Sự kiện Mới',
         style: const TextStyle(fontWeight: FontWeight.bold),
       ),
       content: SizedBox(
-        width: 420,
+        width: 400,
         child: SingleChildScrollView(
           child: Column(
             mainAxisSize: MainAxisSize.min,
             children: [
-              // Hộp cảnh báo đỏ nếu bị Trùng lịch (Conflict Detected)
-              if (_errorMessage != null)
+              if (_errorMsg != null)
                 Container(
-                  width: double.infinity,
                   margin: const EdgeInsets.only(bottom: 12),
                   padding: const EdgeInsets.all(10),
                   decoration: BoxDecoration(
@@ -144,63 +137,60 @@ class _EventFormDialogState extends State<EventFormDialog> {
                       const SizedBox(width: 8),
                       Expanded(
                         child: Text(
-                          _errorMessage!,
-                          style: TextStyle(color: Colors.red.shade800, fontSize: 13),
+                          _errorMsg!,
+                          style: TextStyle(color: Colors.red.shade900, fontSize: 13),
                         ),
                       ),
                     ],
                   ),
                 ),
-
               TextField(
-                controller: _titleController,
+                controller: _titleCtrl,
                 decoration: const InputDecoration(
-                  labelText: 'Tiêu đề sự kiện *',
+                  labelText: 'Tên sự kiện *',
                   border: OutlineInputBorder(),
                 ),
               ),
-              const SizedBox(height: 14),
-
+              const SizedBox(height: 12),
               DropdownButtonFormField<String>(
-                value: _category,
+                initialValue: categories.any((c) => c.name == _category)
+                    ? _category
+                    : categories.first.name,
                 decoration: const InputDecoration(
                   labelText: 'Danh mục',
                   border: OutlineInputBorder(),
                 ),
-                items: AppColors.categories
-                    .map((c) => DropdownMenuItem(value: c, child: Text(c)))
+                items: categories
+                    .map((c) => DropdownMenuItem(value: c.name, child: Text(c.name)))
                     .toList(),
                 onChanged: (val) => setState(() => _category = val!),
               ),
-              const SizedBox(height: 14),
-
+              const SizedBox(height: 12),
               ListTile(
                 shape: RoundedRectangleBorder(
                   borderRadius: BorderRadius.circular(8),
-                  side: const BorderSide(color: AppColors.borderColor),
+                  side: const BorderSide(color: Colors.grey),
                 ),
-                title: Text('Bắt đầu: ${DateFormat('dd/MM/yyyy HH:mm').format(_startTime)}'),
-                trailing: const Icon(Icons.schedule),
+                title: Text('Bắt đầu: ${DateFormat('dd/MM/yyyy HH:mm').format(_start)}'),
+                trailing: const Icon(Icons.access_time),
                 onTap: () => _pickDateTime(true),
               ),
               const SizedBox(height: 10),
-
               ListTile(
                 shape: RoundedRectangleBorder(
                   borderRadius: BorderRadius.circular(8),
-                  side: const BorderSide(color: AppColors.borderColor),
+                  side: const BorderSide(color: Colors.grey),
                 ),
-                title: Text('Kết thúc: ${DateFormat('dd/MM/yyyy HH:mm').format(_endTime)}'),
-                trailing: const Icon(Icons.schedule),
+                title: Text('Kết thúc: ${DateFormat('dd/MM/yyyy HH:mm').format(_end)}'),
+                trailing: const Icon(Icons.access_time),
                 onTap: () => _pickDateTime(false),
               ),
-              const SizedBox(height: 14),
-
+              const SizedBox(height: 12),
               TextField(
-                controller: _descController,
+                controller: _descCtrl,
                 maxLines: 2,
                 decoration: const InputDecoration(
-                  labelText: 'Ghi chú chi tiết',
+                  labelText: 'Ghi chú / Link họp',
                   border: OutlineInputBorder(),
                 ),
               ),
@@ -209,7 +199,6 @@ class _EventFormDialogState extends State<EventFormDialog> {
         ),
       ),
       actions: [
-        // Nút Xóa nếu đang xem sự kiện cũ
         if (isEditing)
           TextButton.icon(
             onPressed: () async {
@@ -221,15 +210,11 @@ class _EventFormDialogState extends State<EventFormDialog> {
           ),
         TextButton(
           onPressed: () => Navigator.pop(context),
-          child: const Text('Hủy'),
+          child: const Text('Cancel'),
         ),
-        ElevatedButton(
-          onPressed: _isSubmitting ? null : _submitForm,
-          style: ElevatedButton.styleFrom(
-            backgroundColor: Colors.indigo.shade600,
-            foregroundColor: Colors.white,
-          ),
-          child: Text(isEditing ? 'Cập nhật' : 'Lưu lịch'),
+        FilledButton(
+          onPressed: _submitting ? null : _save,
+          child: Text(isEditing ? 'Lưu thay đổi' : 'Tạo sự kiện'),
         ),
       ],
     );

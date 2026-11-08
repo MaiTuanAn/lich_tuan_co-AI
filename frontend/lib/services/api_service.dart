@@ -5,7 +5,6 @@ import '../models/event_model.dart';
 class ApiService {
   static const String baseUrl = 'http://127.0.0.1:8000/api';
 
-  // 1. Lấy tất cả sự kiện
   Future<List<EventModel>> fetchEvents() async {
     final response = await http.get(Uri.parse('$baseUrl/events'));
     if (response.statusCode == 200) {
@@ -16,7 +15,6 @@ class ApiService {
     }
   }
 
-  // 2. Tạo sự kiện mới
   Future<EventModel> createEvent({
     required String title,
     required DateTime startTime,
@@ -44,7 +42,6 @@ class ApiService {
     }
   }
 
-  // 3. Cập nhật / Sửa sự kiện
   Future<EventModel> updateEvent({
     required int id,
     required String title,
@@ -73,7 +70,6 @@ class ApiService {
     }
   }
 
-  // 4. Xóa sự kiện
   Future<void> deleteEvent(int id) async {
     final response = await http.delete(Uri.parse('$baseUrl/events/$id'));
     if (response.statusCode != 200) {

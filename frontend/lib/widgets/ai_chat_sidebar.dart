@@ -1,6 +1,5 @@
 import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
-import '../core/app_colors.dart';
 import '../providers/calendar_provider.dart';
 
 class AiChatSidebar extends StatefulWidget {
@@ -11,50 +10,58 @@ class AiChatSidebar extends StatefulWidget {
 }
 
 class _AiChatSidebarState extends State<AiChatSidebar> {
-  final TextEditingController _chatController = TextEditingController();
+  final TextEditingController _controller = TextEditingController();
 
-  void _handleSend(CalendarProvider provider) {
-    if (_chatController.text.trim().isEmpty) return;
-    provider.sendUserChatMessage(_chatController.text);
-    _chatController.clear();
+  void _send(CalendarProvider provider) {
+    if (_controller.text.trim().isEmpty) return;
+    provider.sendUserChatMessage(_controller.text);
+    _controller.clear();
   }
 
   @override
   Widget build(BuildContext context) {
     final provider = context.watch<CalendarProvider>();
+    final isDark = provider.isDarkMode;
 
     return Container(
-      width: 330,
-      decoration: const BoxDecoration(
-        color: Colors.white,
-        border: Border(left: BorderSide(color: AppColors.borderColor)),
+      width: 340,
+      margin: const EdgeInsets.only(right: 12, bottom: 12),
+      decoration: BoxDecoration(
+        color: isDark ? const Color(0xFF1E293B) : Colors.white,
+        borderRadius: BorderRadius.circular(16),
+        border: Border.all(
+          color: isDark ? Colors.white10 : const Color(0xFFCBD5E1),
+        ),
       ),
       child: Column(
         children: [
-          // 1. Tiêu đề AI Scheduler
-          Container(
-            height: 60,
-            padding: const EdgeInsets.symmetric(horizontal: 16),
-            decoration: const BoxDecoration(
-              border: Border(bottom: BorderSide(color: AppColors.borderColor)),
-            ),
+          // Header AI Assistant + Nút đóng X
+          Padding(
+            padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
             child: Row(
               children: [
-                Icon(Icons.auto_awesome, color: Colors.indigo.shade600, size: 20),
+                const Icon(Icons.auto_awesome, color: Colors.indigoAccent, size: 20),
                 const SizedBox(width: 8),
-                const Text(
-                  'AI Scheduler',
+                Text(
+                  'AI Assistant',
                   style: TextStyle(
                     fontSize: 16,
                     fontWeight: FontWeight.bold,
-                    color: AppColors.textPrimary,
+                    color: isDark ? Colors.white : const Color(0xFF0F172A),
                   ),
+                ),
+                const Spacer(),
+                IconButton(
+                  icon: const Icon(Icons.close, size: 20),
+                  tooltip: 'Ẩn khung chat AI',
+                  onPressed: provider.toggleChatSidebar,
                 ),
               ],
             ),
           ),
+          const Divider(height: 1),
 
-          // 2. Danh sách hội thoại
+          // Danh sách tin nhắn & Thẻ đề xuất sự kiện
           Expanded(
             child: ListView.builder(
               padding: const EdgeInsets.all(16),
@@ -63,64 +70,112 @@ class _AiChatSidebarState extends State<AiChatSidebar> {
                 final msg = provider.chatMessages[index];
                 final isUser = msg['isUser'] as bool;
 
-                return Align(
-                  alignment: isUser ? Alignment.centerRight : Alignment.centerLeft,
-                  child: Container(
-                    margin: const EdgeInsets.only(bottom: 12),
-                    padding: const EdgeInsets.all(12),
-                    constraints: const BoxConstraints(maxWidth: 260),
-                    decoration: BoxDecoration(
-                      color: isUser ? Colors.indigo.shade600 : AppColors.sidebarBackground,
-                      borderRadius: BorderRadius.circular(12),
-                    ),
-                    child: Text(
-                      msg['text'] as String,
-                      style: TextStyle(
-                        color: isUser ? Colors.white : AppColors.textPrimary,
-                        fontSize: 13.5,
-                        height: 1.4,
+                return Column(
+                  crossAxisAlignment:
+                      isUser ? CrossAxisAlignment.end : CrossAxisAlignment.start,
+                  children: [
+                    Container(
+                      margin: const EdgeInsets.only(bottom: 10),
+                      padding: const EdgeInsets.all(12),
+                      decoration: BoxDecoration(
+                        color: isUser
+                            ? Colors.indigo.shade600
+                            : (isDark ? const Color(0xFF334155) : const Color(0xFFE2E8F0)),
+                        borderRadius: BorderRadius.circular(14),
+                      ),
+                      child: Text(
+                        msg['text'] as String,
+                        style: TextStyle(
+                          color: isUser
+                              ? Colors.white
+                              : (isDark ? Colors.white : Colors.black87),
+                          fontSize: 13.5,
+                        ),
                       ),
                     ),
-                  ),
+
+                    // Thẻ xác nhận tạo lịch thông minh (Suggested Event Card)
+                    if (msg['suggestedTitle'] != null)
+                      Container(
+                        margin: const EdgeInsets.only(bottom: 14),
+                        padding: const EdgeInsets.all(14),
+                        decoration: BoxDecoration(
+                          color: isDark ? const Color(0xFF0F172A) : Colors.white,
+                          borderRadius: BorderRadius.circular(14),
+                          border: Border.all(color: Colors.indigo.withValues(alpha: 0.3)),
+                        ),
+                        child: Column(
+                          crossAxisAlignment: CrossAxisAlignment.start,
+                          children: [
+                            Text(
+                              msg['suggestedTitle'] as String,
+                              style: TextStyle(
+                                fontWeight: FontWeight.bold,
+                                fontSize: 15,
+                                color: isDark ? Colors.white : Colors.black87,
+                              ),
+                            ),
+                            const SizedBox(height: 4),
+                            const Text(
+                              'Thứ Sáu, 14:00 – 16:00',
+                              style: TextStyle(fontSize: 12.5, color: Colors.grey),
+                            ),
+                            const SizedBox(height: 12),
+                            Row(
+                              children: [
+                                FilledButton(
+                                  onPressed: () {
+                                    final now = provider.focusedDate;
+                                    provider.addNewEvent(
+                                      title: msg['suggestedTitle'] as String,
+                                      startTime: DateTime(now.year, now.month, now.day, 14, 0),
+                                      endTime: DateTime(now.year, now.month, now.day, 16, 0),
+                                      category: 'Công việc',
+                                    );
+                                  },
+                                  child: const Text('Schedule'),
+                                ),
+                                const SizedBox(width: 10),
+                                TextButton(
+                                  onPressed: () {},
+                                  child: const Text('Cancel'),
+                                ),
+                              ],
+                            ),
+                          ],
+                        ),
+                      ),
+                  ],
                 );
               },
             ),
           ),
 
-          // 3. Ô nhập câu lệnh tiếng Việt tự nhiên
-          Container(
+          // Ô nhập lệnh chat
+          Padding(
             padding: const EdgeInsets.all(12),
-            decoration: const BoxDecoration(
-              border: Border(top: BorderSide(color: AppColors.borderColor)),
-            ),
-            child: Row(
-              children: [
-                Expanded(
-                  child: TextField(
-                    controller: _chatController,
-                    onSubmitted: (_) => _handleSend(provider),
-                    decoration: InputDecoration(
-                      hintText: 'Nhập lệnh tạo lịch...',
-                      hintStyle: const TextStyle(fontSize: 13),
-                      filled: true,
-                      fillColor: AppColors.sidebarBackground,
-                      contentPadding: const EdgeInsets.symmetric(
-                        horizontal: 14,
-                        vertical: 10,
-                      ),
-                      border: OutlineInputBorder(
-                        borderRadius: BorderRadius.circular(20),
-                        borderSide: BorderSide.none,
-                      ),
+            child: TextField(
+              controller: _controller,
+              onSubmitted: (_) => _send(provider),
+              decoration: InputDecoration(
+                hintText: 'Ask AI assistant...',
+                filled: true,
+                fillColor: isDark ? const Color(0xFF0F172A) : const Color(0xFFF1F5F9),
+                suffixIcon: Row(
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    const Icon(Icons.mic_none, size: 20),
+                    IconButton(
+                      icon: const Icon(Icons.send_rounded, size: 20),
+                      onPressed: () => _send(provider),
                     ),
-                  ),
+                  ],
                 ),
-                const SizedBox(width: 8),
-                IconButton(
-                  onPressed: () => _handleSend(provider),
-                  icon: Icon(Icons.send_rounded, color: Colors.indigo.shade600),
+                border: OutlineInputBorder(
+                  borderRadius: BorderRadius.circular(14),
+                  borderSide: BorderSide.none,
                 ),
-              ],
+              ),
             ),
           ),
         ],

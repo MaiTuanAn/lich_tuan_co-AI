@@ -1,6 +1,3 @@
-import 'package:flutter/material.dart';
-import '../core/app_colors.dart';
-
 class EventModel {
   final int id;
   final String title;
@@ -24,7 +21,7 @@ class EventModel {
       title: json['title'],
       startTime: DateTime.parse(json['start_time']),
       endTime: DateTime.parse(json['end_time']),
-      category: json['category'] ?? 'Công việc',
+      category: json['category'] ?? 'Work',
       description: json['description'] ?? '',
     );
   }
@@ -38,7 +35,4 @@ class EventModel {
       'description': description,
     };
   }
-
-  Color get backgroundColor => AppColors.getCategoryPastelColor(category);
-  Color get primaryColor => AppColors.getCategoryPrimaryColor(category);
 }
