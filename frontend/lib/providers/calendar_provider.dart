@@ -84,19 +84,57 @@ class CalendarProvider extends ChangeNotifier {
     return found.color;
   }
 
-  // --- HÀNH ĐỘNG XÁC THỰC (AUTH / GUEST) ---
-  void login(String name, String email) {
+   // --- HÀNH ĐỘNG XÁC THỰC (ĐĂNG KÝ, ĐĂNG NHẬP, ĐỔI MẬT KHẨU, ĐĂNG XUẤT) ---
+  Future<void> registerAccount({
+    required String fullName,
+    required String email,
+    required String password,
+  }) async {
+    final data = await _apiService.register(
+      fullName: fullName,
+      email: email,
+      password: password,
+    );
+    _applyAuthSuccess(data);
+  }
+
+  Future<void> loginAccount({
+    required String email,
+    required String password,
+  }) async {
+    final data = await _apiService.login(
+      email: email,
+      password: password,
+    );
+    _applyAuthSuccess(data);
+  }
+
+  void _applyAuthSuccess(Map<String, dynamic> data) {
+    final token = data['access_token'] as String;
+    final user = data['user'] as Map<String, dynamic>;
+    _apiService.setToken(token);
     _isLoggedIn = true;
-    _userName = name.isNotEmpty ? name : 'Nguyễn Văn A';
-    _userEmail = email.isNotEmpty ? email : 'nguyenvana@gmail.com';
-    _isChatSidebarOpen = true; // Mở sẵn khung AI khi vừa đăng nhập
-    notifyListeners();
+    _userName = user['full_name'] ?? 'Người dùng';
+    _userEmail = user['email'] ?? '';
+    _isChatSidebarOpen = true;
+    loadEvents(); // Tự động tải lịch riêng của tài khoản này
+  }
+
+  Future<void> changeUserPassword({
+    required String oldPassword,
+    required String newPassword,
+  }) async {
+    await _apiService.changePassword(
+      oldPassword: oldPassword,
+      newPassword: newPassword,
+    );
   }
 
   void logoutToGuestMode() {
+    _apiService.setToken(null);
     _isLoggedIn = false;
-    _isChatSidebarOpen = false; // Ẩn ngay khung AI khi về chế độ Khách
-    notifyListeners();
+    _isChatSidebarOpen = false;
+    loadEvents(); // Tải lại lịch của Chế độ Khách
   }
 
   // --- HÀNH ĐỘNG GIAO DIỆN (THEME & SIDEBAR) ---

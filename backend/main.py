@@ -1,16 +1,19 @@
+import hashlib
+import re
+import secrets
+import sqlite3
 from datetime import datetime
 from typing import Optional
-from fastapi import FastAPI, HTTPException, status
+from fastapi import FastAPI, HTTPException, Header, status
 from fastapi.middleware.cors import CORSMiddleware
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, field_validator
 
 app = FastAPI(
-    title="Hệ thống Quản lý Lịch tuần",
-    description="API cung cấp đầy đủ các thao tác Thêm, Sửa, Xóa và Kiểm tra trùng lịch",
-    version="1.0.0"
+    title="SchedulAI Backend - SQLite Real Database",
+    version="2.1.0"
 )
 
-# 1. Cấu hình CORS để ứng dụng Flutter kết nối được
+# 1. Cấu hình CORS cho phép Flutter kết nối
 app.add_middleware(
     CORSMiddleware,
     allow_origins=["*"],
@@ -19,16 +22,132 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-# 2. Định nghĩa cấu trúc dữ liệu với Pydantic
-class EventBase(BaseModel):
-    title: str = Field(..., example="Họp nhóm đồ án Lịch tuần")
-    start_time: datetime = Field(..., example="2026-11-13T09:00:00")
-    end_time: datetime = Field(..., example="2026-11-13T10:30:00")
-    category: str = Field(default="Công việc", example="Học tập")
-    description: Optional[str] = Field(default="", example="Báo cáo tiến độ 50% với hội đồng")
+# ==============================================================================
+# 2. KHỞI TẠO CƠ SỞ DỮ LIỆU THẬT SQLITE (LƯU TRONG FILE schedulai.db)
+# ==============================================================================
+DB_FILE = "schedulai.db"
 
-class EventCreate(EventBase):
-    pass
+def get_db_connection():
+    conn = sqlite3.connect(DB_FILE)
+    conn.row_factory = sqlite3.Row  # Trả về kết quả dạng từ điển (dict-like)
+    return conn
+
+def init_database():
+    conn = get_db_connection()
+    cursor = conn.cursor()
+
+    # Bảng 1: Lưu tài khoản người dùng
+    cursor.execute("""
+        CREATE TABLE IF NOT EXISTS users (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            full_name TEXT NOT NULL,
+            email TEXT UNIQUE NOT NULL,
+            password_hash TEXT NOT NULL,
+            role TEXT DEFAULT 'Student / Sinh viên',
+            created_at TEXT DEFAULT CURRENT_TIMESTAMP
+        )
+    """)
+
+    # Bảng 2: Lưu phiên đăng nhập (Access Tokens)
+    cursor.execute("""
+        CREATE TABLE IF NOT EXISTS user_tokens (
+            token TEXT PRIMARY KEY,
+            user_id INTEGER NOT NULL,
+            created_at TEXT DEFAULT CURRENT_TIMESTAMP,
+            FOREIGN KEY (user_id) REFERENCES users (id) ON DELETE CASCADE
+        )
+    """)
+
+    # Bảng 3: Lưu sự kiện lịch tuần (user_id = NULL là lịch ở Chế độ Khách)
+    cursor.execute("""
+        CREATE TABLE IF NOT EXISTS events (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            user_id INTEGER NULL,
+            title TEXT NOT NULL,
+            start_time TEXT NOT NULL,
+            end_time TEXT NOT NULL,
+            category TEXT DEFAULT 'Công việc',
+            description TEXT DEFAULT '',
+            FOREIGN KEY (user_id) REFERENCES users (id) ON DELETE CASCADE
+        )
+    """)
+
+    conn.commit()
+    conn.close()
+
+# Tự động tạo file schedulai.db và các bảng ngay khi chạy server
+init_database()
+
+# ==============================================================================
+# 3. CÁC HÀM KIỂM TRA ĐỊNH DẠNG EMAIL & MẬT KHẨU (REGEX VALIDATORS)
+# ==============================================================================
+EMAIL_REGEX = r"^[a-zA-Z0-9_.+-]+@[a-zA-Z0-9-]+\.[a-zA-Z0-9-.]+$"
+
+def validate_email_format(email: str) -> str:
+    cleaned = email.strip().lower()
+    if not re.match(EMAIL_REGEX, cleaned):
+        raise ValueError("Email không đúng định dạng chuẩn (ví dụ: tenban@gmail.com)!")
+    return cleaned
+
+def validate_password_strength(password: str) -> str:
+    if len(password) < 8:
+        raise ValueError("Mật khẩu phải có ít nhất 8 ký tự!")
+    if not re.search(r"[A-Za-z]", password):
+        raise ValueError("Mật khẩu phải chứa ít nhất 1 chữ cái (a-z hoặc A-Z)!")
+    if not re.search(r"\d", password):
+        raise ValueError("Mật khẩu phải chứa ít nhất 1 chữ số (0-9)!")
+    return password
+
+def hash_password(password: str) -> str:
+    return hashlib.sha256(password.encode("utf-8")).hexdigest()
+
+# ==============================================================================
+# 4. KHUÔN MẪU DỮ LIỆU (PYDANTIC SCHEMAS)
+# ==============================================================================
+class RegisterRequest(BaseModel):
+    full_name: str = Field(..., min_length=2)
+    email: str
+    password: str
+
+    @field_validator("email")
+    @classmethod
+    def check_email(cls, v: str) -> str:
+        return validate_email_format(v)
+
+    @field_validator("password")
+    @classmethod
+    def check_password(cls, v: str) -> str:
+        return validate_password_strength(v)
+
+class LoginRequest(BaseModel):
+    email: str
+    password: str
+
+class ChangePasswordRequest(BaseModel):
+    old_password: str
+    new_password: str
+
+    @field_validator("new_password")
+    @classmethod
+    def check_new_password(cls, v: str) -> str:
+        return validate_password_strength(v)
+
+class UserResponse(BaseModel):
+    id: int
+    full_name: str
+    email: str
+    role: str
+
+class AuthResponse(BaseModel):
+    access_token: str
+    user: UserResponse
+
+class EventCreate(BaseModel):
+    title: str
+    start_time: datetime
+    end_time: datetime
+    category: str = "Công việc"
+    description: Optional[str] = ""
 
 class EventUpdate(BaseModel):
     title: Optional[str] = None
@@ -37,126 +156,247 @@ class EventUpdate(BaseModel):
     category: Optional[str] = None
     description: Optional[str] = None
 
-class EventResponse(EventBase):
+class EventResponse(BaseModel):
     id: int
+    user_id: Optional[int] = None
+    title: str
+    start_time: datetime
+    end_time: datetime
+    category: str
+    description: str
 
-# 3. Dữ liệu mẫu ban đầu (Fake Database)
-fake_database: list[dict] = [
-    {
-        "id": 1,
-        "title": "Họp giao ban đầu tuần",
-        "start_time": datetime.fromisoformat("2026-11-09T08:00:00"),
-        "end_time": datetime.fromisoformat("2026-11-09T09:30:00"),
-        "category": "Công việc",
-        "description": "Lập kế hoạch tuần"
-    },
-    {
-        "id": 2,
-        "title": "Học chuyên đề Flutter",
-        "start_time": datetime.fromisoformat("2026-11-10T13:30:00"),
-        "end_time": datetime.fromisoformat("2026-11-10T15:30:00"),
-        "category": "Học tập",
-        "description": "Thực hành dựng giao diện Weekly View"
+# ==============================================================================
+# 5. HÀM XÁC THỰC TOKEN TỪ DATABASE
+# ==============================================================================
+def get_current_user_id(authorization: Optional[str] = Header(default=None)) -> Optional[int]:
+    if not authorization or not authorization.startswith("Bearer "):
+        return None
+    token = authorization.replace("Bearer ", "").strip()
+    conn = get_db_connection()
+    row = conn.execute("SELECT user_id FROM user_tokens WHERE token = ?", (token,)).fetchone()
+    conn.close()
+    return row["user_id"] if row else None
+
+# ==============================================================================
+# 6. CÁC ENDPOINTS QUẢN LÝ TÀI KHOẢN (LƯU VĨNH VIỄN VÀO SQLITE)
+# ==============================================================================
+
+@app.post("/api/auth/register", response_model=AuthResponse, status_code=status.HTTP_201_CREATED)
+def register_account(req: RegisterRequest):
+    conn = get_db_connection()
+    cursor = conn.cursor()
+
+    # 1. Kiểm tra email trùng lặp trong bảng users
+    existing = cursor.execute("SELECT id FROM users WHERE email = ?", (req.email,)).fetchone()
+    if existing:
+        conn.close()
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Email này đã được đăng ký! Vui lòng dùng email khác hoặc đăng nhập."
+        )
+
+    # 2. Lưu tài khoản mới vào file schedulai.db
+    pwd_hash = hash_password(req.password)
+    cursor.execute(
+        "INSERT INTO users (full_name, email, password_hash, role) VALUES (?, ?, ?, ?)",
+        (req.full_name.strip(), req.email, pwd_hash, "Student / Sinh viên")
+    )
+    user_id = cursor.lastrowid
+
+    # 3. Sinh Access Token và lưu vào bảng user_tokens
+    token = secrets.token_hex(24)
+    cursor.execute("INSERT INTO user_tokens (token, user_id) VALUES (?, ?)", (token, user_id))
+    conn.commit()
+
+    user_row = cursor.execute("SELECT id, full_name, email, role FROM users WHERE id = ?", (user_id,)).fetchone()
+    conn.close()
+
+    return {
+        "access_token": token,
+        "user": dict(user_row)
     }
-]
 
-# 4. Thuật toán kiểm tra xung đột thời gian (Trùng lịch)
-def check_time_conflict(new_start: datetime, new_end: datetime, exclude_id: Optional[int] = None):
-    """
-    Hai khoảng thời gian [S1, E1) và [S2, E2) bị trùng nhau khi:
-    S1 < E2 và E1 > S2
-    """
+@app.post("/api/auth/login", response_model=AuthResponse)
+def login_account(req: LoginRequest):
+    cleaned_email = req.email.strip().lower()
+    pwd_hash = hash_password(req.password)
+
+    conn = get_db_connection()
+    cursor = conn.cursor()
+    user_row = cursor.execute(
+        "SELECT id, full_name, email, role FROM users WHERE email = ? AND password_hash = ?",
+        (cleaned_email, pwd_hash)
+    ).fetchone()
+
+    if not user_row:
+        conn.close()
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Email hoặc mật khẩu không chính xác!"
+        )
+
+    token = secrets.token_hex(24)
+    cursor.execute("INSERT INTO user_tokens (token, user_id) VALUES (?, ?)", (token, user_row["id"]))
+    conn.commit()
+    conn.close()
+
+    return {
+        "access_token": token,
+        "user": dict(user_row)
+    }
+
+@app.put("/api/auth/change-password")
+def change_password(
+    req: ChangePasswordRequest,
+    authorization: Optional[str] = Header(default=None)
+):
+    user_id = get_current_user_id(authorization)
+    if not user_id:
+        raise HTTPException(status_code=401, detail="Vui lòng đăng nhập để đổi mật khẩu!")
+
+    conn = get_db_connection()
+    cursor = conn.cursor()
+    user_row = cursor.execute("SELECT password_hash FROM users WHERE id = ?", (user_id,)).fetchone()
+
+    if not user_row or user_row["password_hash"] != hash_password(req.old_password):
+        conn.close()
+        raise HTTPException(status_code=400, detail="Mật khẩu hiện tại không đúng!")
+
+    cursor.execute(
+        "UPDATE users SET password_hash = ? WHERE id = ?",
+        (hash_password(req.new_password), user_id)
+    )
+    conn.commit()
+    conn.close()
+    return {"status": "success", "message": "Đổi mật khẩu thành công!"}
+
+# ==============================================================================
+# 7. CÁC ENDPOINTS LỊCH TUẦN (LƯU VĨNH VIỄN VÀO SQLITE)
+# ==============================================================================
+
+def check_time_conflict_sqlite(
+    conn: sqlite3.Connection,
+    new_start: datetime,
+    new_end: datetime,
+    user_id: Optional[int],
+    exclude_id: Optional[int] = None
+):
     if new_start >= new_end:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
-            detail="Thời gian kết thúc phải diễn ra sau thời gian bắt đầu!"
+            detail="Thời gian kết thúc phải lớn hơn thời gian bắt đầu!"
         )
 
-    for event in fake_database:
-        # Bỏ qua chính nó khi đang thao tác Cập nhật (Sửa)
-        if exclude_id is not None and event["id"] == exclude_id:
-            continue
+    if user_id is None:
+        rows = conn.execute("SELECT id, title, start_time, end_time FROM events WHERE user_id IS NULL").fetchall()
+    else:
+        rows = conn.execute("SELECT id, title, start_time, end_time FROM events WHERE user_id = ?", (user_id,)).fetchall()
 
-        # Kiểm tra điều kiện giao nhau
-        if new_start < event["end_time"] and new_end > event["start_time"]:
+    for r in rows:
+        if exclude_id is not None and r["id"] == exclude_id:
+            continue
+        ev_start = datetime.fromisoformat(r["start_time"])
+        ev_end = datetime.fromisoformat(r["end_time"])
+        if new_start < ev_end and new_end > ev_start:
             raise HTTPException(
                 status_code=status.HTTP_400_BAD_REQUEST,
-                detail=f"Trùng lịch với: '{event['title']}' ({event['start_time'].strftime('%H:%M')} - {event['end_time'].strftime('%H:%M')})"
+                detail=f"Trùng lịch với '{r['title']}' ({ev_start.strftime('%H:%M')} - {ev_end.strftime('%H:%M')})"
             )
 
-# --- 5. CÁC ĐƯỜNG DẪN API (ENDPOINTS) ---
-
 @app.get("/api/events", response_model=list[EventResponse])
-def get_all_events():
-    """Lấy danh sách tất cả các sự kiện (đã sắp xếp theo thời gian bắt đầu)"""
-    return sorted(fake_database, key=lambda x: x["start_time"])
-
-@app.get("/api/events/{event_id}", response_model=EventResponse)
-def get_event_detail(event_id: int):
-    """Xem chi tiết 1 sự kiện theo ID"""
-    for event in fake_database:
-        if event["id"] == event_id:
-            return event
-    raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Không tìm thấy sự kiện!")
+def get_events(authorization: Optional[str] = Header(default=None)):
+    user_id = get_current_user_id(authorization)
+    conn = get_db_connection()
+    if user_id is None:
+        rows = conn.execute("SELECT * FROM events WHERE user_id IS NULL ORDER BY start_time ASC").fetchall()
+    else:
+        rows = conn.execute("SELECT * FROM events WHERE user_id = ? ORDER BY start_time ASC", (user_id,)).fetchall()
+    conn.close()
+    return [dict(r) for r in rows]
 
 @app.post("/api/events", response_model=EventResponse, status_code=status.HTTP_201_CREATED)
-def create_event(event_in: EventCreate):
-    """Tạo sự kiện mới có kiểm tra trùng giờ"""
-    # 1. Kiểm tra xem có bị trùng lịch với sự kiện nào không
-    check_time_conflict(event_in.start_time, event_in.end_time)
-
-    # 2. Tạo ID mới và lưu vào cơ sở dữ liệu
-    new_id = max([e["id"] for e in fake_database], default=0) + 1
-    new_event = {
-        "id": new_id,
-        "title": event_in.title,
-        "start_time": event_in.start_time,
-        "end_time": event_in.end_time,
-        "category": event_in.category,
-        "description": event_in.description
-    }
-    fake_database.append(new_event)
-    return new_event
+def create_event(
+    event_in: EventCreate,
+    authorization: Optional[str] = Header(default=None)
+):
+    user_id = get_current_user_id(authorization)
+    conn = get_db_connection()
+    try:
+        check_time_conflict_sqlite(conn, event_in.start_time, event_in.end_time, user_id)
+        cursor = conn.cursor()
+        cursor.execute(
+            """
+            INSERT INTO events (user_id, title, start_time, end_time, category, description)
+            VALUES (?, ?, ?, ?, ?, ?)
+            """,
+            (
+                user_id,
+                event_in.title.strip(),
+                event_in.start_time.isoformat(),
+                event_in.end_time.isoformat(),
+                event_in.category,
+                event_in.description or ""
+            )
+        )
+        conn.commit()
+        new_id = cursor.lastrowid
+        row = conn.execute("SELECT * FROM events WHERE id = ?", (new_id,)).fetchone()
+        return dict(row)
+    finally:
+        conn.close()
 
 @app.put("/api/events/{event_id}", response_model=EventResponse)
-def update_event(event_id: int, event_update: EventUpdate):
-    """Sửa thông tin hoặc dời lịch sự kiện"""
-    target_event = None
-    for event in fake_database:
-        if event["id"] == event_id:
-            target_event = event
-            break
+def update_event(
+    event_id: int,
+    event_update: EventUpdate,
+    authorization: Optional[str] = Header(default=None)
+):
+    user_id = get_current_user_id(authorization)
+    conn = get_db_connection()
+    try:
+        if user_id is None:
+            target = conn.execute("SELECT * FROM events WHERE id = ? AND user_id IS NULL", (event_id,)).fetchone()
+        else:
+            target = conn.execute("SELECT * FROM events WHERE id = ? AND user_id = ?", (event_id, user_id)).fetchone()
 
-    if not target_event:
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Không tìm thấy sự kiện để sửa!")
+        if not target:
+            raise HTTPException(status_code=404, detail="Không tìm thấy sự kiện!")
 
-    # Tính toán thời gian mới nếu có thay đổi
-    new_start = event_update.start_time or target_event["start_time"]
-    new_end = event_update.end_time or target_event["end_time"]
+        new_start = event_update.start_time or datetime.fromisoformat(target["start_time"])
+        new_end = event_update.end_time or datetime.fromisoformat(target["end_time"])
+        check_time_conflict_sqlite(conn, new_start, new_end, user_id, exclude_id=event_id)
 
-    # Kiểm tra trùng lịch (loại trừ chính sự kiện này)
-    check_time_conflict(new_start, new_end, exclude_id=event_id)
+        new_title = event_update.title if event_update.title is not None else target["title"]
+        new_cat = event_update.category if event_update.category is not None else target["category"]
+        new_desc = event_update.description if event_update.description is not None else target["description"]
 
-    # Cập nhật thông tin
-    if event_update.title is not None:
-        target_event["title"] = event_update.title
-    if event_update.category is not None:
-        target_event["category"] = event_update.category
-    if event_update.description is not None:
-        target_event["description"] = event_update.description
-    target_event["start_time"] = new_start
-    target_event["end_time"] = new_end
+        conn.execute(
+            """
+            UPDATE events
+            SET title = ?, start_time = ?, end_time = ?, category = ?, description = ?
+            WHERE id = ?
+            """,
+            (new_title, new_start.isoformat(), new_end.isoformat(), new_cat, new_desc, event_id)
+        )
+        conn.commit()
+        updated = conn.execute("SELECT * FROM events WHERE id = ?", (event_id,)).fetchone()
+        return dict(updated)
+    finally:
+        conn.close()
 
-    return target_event
+@app.delete("/api/events/{event_id}")
+def delete_event(event_id: int, authorization: Optional[str] = Header(default=None)):
+    user_id = get_current_user_id(authorization)
+    conn = get_db_connection()
+    cursor = conn.cursor()
+    if user_id is None:
+        cursor.execute("DELETE FROM events WHERE id = ? AND user_id IS NULL", (event_id,))
+    else:
+        cursor.execute("DELETE FROM events WHERE id = ? AND user_id = ?", (event_id, user_id))
+    conn.commit()
+    deleted_count = cursor.rowcount
+    conn.close()
 
-@app.delete("/api/events/{event_id}", status_code=status.HTTP_200_OK)
-def delete_event(event_id: int):
-    """Xóa một sự kiện khỏi lịch"""
-    global fake_database
-    initial_length = len(fake_database)
-    fake_database = [e for e in fake_database if e["id"] != event_id]
-
-    if len(fake_database) == initial_length:
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Không tìm thấy sự kiện để xóa!")
-
-    return {"status": "success", "message": f"Đã xóa thành công sự kiện #{event_id}"}
+    if deleted_count == 0:
+        raise HTTPException(status_code=404, detail="Không tìm thấy sự kiện để xóa!")
+    return {"status": "success"}
