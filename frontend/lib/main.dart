@@ -20,7 +20,7 @@ class SchedulAIApp extends StatelessWidget {
     final themeMode = context.select<CalendarProvider, ThemeMode>((p) => p.themeMode);
 
     return MaterialApp(
-      title: 'SchedulAI - Quản lý Lịch tuần AI',
+      title: 'Chân Đèn 16 - Quản lý Lịch tuần',
       debugShowCheckedModeBanner: false,
       themeMode: themeMode,
       theme: ThemeData(

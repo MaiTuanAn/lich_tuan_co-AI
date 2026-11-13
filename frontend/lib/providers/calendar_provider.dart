@@ -10,8 +10,8 @@ class CalendarProvider extends ChangeNotifier {
 
   // 1. Trạng thái Đăng nhập & Giao diện
   bool _isLoggedIn = false; // Mặc định ở Chế độ Khách (Guest Mode)
-  String _userName = 'Nguyễn Văn A';
-  String _userEmail = 'nguyenvana@gmail.com';
+  String _userName = 'Chen Qianyu';
+  String _userEmail = 'chanden16@gmail.com';
   ThemeMode _themeMode = ThemeMode.light;
   bool _isChatSidebarOpen = false;
   bool _isLoading = false;
