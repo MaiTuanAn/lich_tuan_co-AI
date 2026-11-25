@@ -18,7 +18,7 @@ class _MainLayoutScreenState extends State<MainLayoutScreen> {
   void initState() {
     super.initState();
     WidgetsBinding.instance.addPostFrameCallback((_) {
-      context.read<CalendarProvider>().loadEvents();
+      context.read<CalendarProvider>().bootstrap();
     });
   }
 

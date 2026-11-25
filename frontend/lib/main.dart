@@ -2,14 +2,39 @@ import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
 import 'providers/calendar_provider.dart';
 import 'screens/main_layout_screen.dart';
+import 'package:supabase_flutter/supabase_flutter.dart';
+import 'core/app_config.dart';
 
-void main() {
+Future<void> main() async {
+  WidgetsFlutterBinding.ensureInitialized();
+  await Supabase.initialize(
+    url: AppConfig.supabaseUrl,
+    publishableKey: AppConfig.supabaseAnonKey,
+  );
+  await _testSupabase(); // tạm thời, test xong thì xóa
+
   runApp(
     ChangeNotifierProvider(
       create: (_) => CalendarProvider(),
       child: const SchedulAIApp(),
     ),
   );
+}
+
+Future<void> _testSupabase() async {
+  final client = Supabase.instance.client;
+  try {
+    if (client.auth.currentSession == null) {
+      await client.auth.signInAnonymously();
+    }
+    final user = client.auth.currentUser;
+    debugPrint('✅ Auth OK - user: ${user?.id} (ẩn danh: ${user?.isAnonymous})');
+
+    final cats = await client.from('categories').select('name, color');
+    debugPrint('✅ Database OK - ${cats.length} danh mục: $cats');
+  } catch (e) {
+    debugPrint('❌ Supabase lỗi: $e');
+  }
 }
 
 class SchedulAIApp extends StatelessWidget {

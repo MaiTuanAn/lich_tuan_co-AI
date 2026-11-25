@@ -2,22 +2,27 @@ import 'package:flutter/material.dart';
 import 'package:syncfusion_flutter_calendar/calendar.dart';
 import '../models/category_model.dart';
 import '../models/event_model.dart';
-import '../services/api_service.dart';
+import '../services/auth_service.dart';
+import '../services/category_repository.dart';
+import '../services/event_repository.dart';
 
 class CalendarProvider extends ChangeNotifier {
-  final ApiService _apiService = ApiService();
+  final AuthService _auth = AuthService();
+  final EventRepository _eventRepo = EventRepository();
+  final CategoryRepository _categoryRepo = CategoryRepository();
   final CalendarController calendarController = CalendarController();
 
   // 1. Trạng thái Đăng nhập & Giao diện
-  bool _isLoggedIn = false; // Mặc định ở Chế độ Khách (Guest Mode)
-  String _userName = 'Chen Qianyu';
-  String _userEmail = 'chanden16@gmail.com';
+  // "Đã đăng nhập" = có tài khoản thật. Khách ẩn danh vẫn có phiên nhưng isLoggedIn = false.
+  bool _isLoggedIn = false;
+  String _userName = 'Khách';
+  String _userEmail = '';
   ThemeMode _themeMode = ThemeMode.light;
   bool _isChatSidebarOpen = false;
   bool _isLoading = false;
   DateTime _focusedDate = DateTime.now();
 
-  // 2. Cấu hình Cài đặt (Settings State)
+  // 2. Cấu hình Cài đặt (Settings State) - chưa lưu lên cloud, sẽ làm ở bước sau
   String appLanguage = 'Tiếng Việt';
   String dateFormat = 'DD/MM/YYYY';
   bool use24HourFormat = true;
@@ -36,14 +41,8 @@ class CalendarProvider extends ChangeNotifier {
   bool dailyBriefing = true;
   bool conflictAlerts = true;
 
-  // 3. Danh sách Danh mục mặc định
-  final List<CategoryModel> _categories = [
-    CategoryModel(name: 'Công việc', color: const Color(0xFF2563EB)),
-    CategoryModel(name: 'Học tập', color: const Color(0xFF16A34A)),
-    CategoryModel(name: 'Cá nhân', color: const Color(0xFFEA580C)),
-    CategoryModel(name: 'Khẩn cấp', color: const Color(0xFFDC2626)),
-  ];
-
+  // 3. Danh mục & sự kiện: tải từ Supabase (không còn hard-code)
+  final List<CategoryModel> _categories = [];
   List<EventModel> _allEvents = [];
 
   final List<Map<String, dynamic>> chatMessages = [
@@ -66,78 +65,106 @@ class CalendarProvider extends ChangeNotifier {
 
   // Lọc sự kiện theo các danh mục đang bật
   List<EventModel> get filteredEvents {
-    final activeNames = _categories.where((c) => c.isVisible).map((c) => c.name).toSet();
-    return _allEvents.where((e) => activeNames.contains(e.category)).toList();
+    final hidden = _categories.where((c) => !c.isVisible).map((c) => c.name).toSet();
+    return _allEvents.where((e) => !hidden.contains(e.category)).toList();
   }
 
-  // Đếm số sự kiện trong từng danh mục
   int countEventsByCategory(String categoryName) {
     return _allEvents.where((e) => e.category == categoryName).length;
   }
 
-  // Lấy màu của danh mục
   Color getColorForCategory(String categoryName) {
-    final found = _categories.firstWhere(
-      (c) => c.name == categoryName,
-      orElse: () => _categories.first,
-    );
-    return found.color;
+    for (final c in _categories) {
+      if (c.name == categoryName) return c.color;
+    }
+    return _categories.isNotEmpty ? _categories.first.color : const Color(0xFF2563EB);
   }
 
-   // --- HÀNH ĐỘNG XÁC THỰC (ĐĂNG KÝ, ĐĂNG NHẬP, ĐỔI MẬT KHẨU, ĐĂNG XUẤT) ---
+  String? _categoryIdByName(String name) {
+    for (final c in _categories) {
+      if (c.name == name) return c.id;
+    }
+    return _categories.isNotEmpty ? _categories.first.id : null;
+  }
+
+  // ---------------------------------------------------------------------------
+  // KHỞI TẠO: gọi 1 lần khi mở app (MainLayoutScreen.initState)
+  // Khôi phục phiên đăng nhập; chưa có thì tạo khách ẩn danh; rồi tải dữ liệu.
+  // ---------------------------------------------------------------------------
+  Future<void> bootstrap() async {
+    await _runWithLoading(() async {
+      await _auth.ensureSession();
+      await _reloadAll();
+    });
+  }
+
+  /// Tải lại danh mục + sự kiện (nút làm mới trong hồ sơ cũng gọi hàm này)
+  Future<void> loadEvents() async {
+    await _runWithLoading(_reloadAll);
+  }
+
+  Future<void> _reloadAll() async {
+    await _syncUserState();
+    final cats = await _categoryRepo.fetchAll();
+    _categories
+      ..clear()
+      ..addAll(cats);
+    _allEvents = await _eventRepo.fetchAll();
+  }
+
+  Future<void> _syncUserState() async {
+    final user = _auth.currentUser;
+    _isLoggedIn = user != null && !user.isAnonymous;
+    _userEmail = _isLoggedIn ? (user?.email ?? '') : '';
+    _userName = _isLoggedIn ? (await _auth.fetchFullName() ?? _userEmail) : 'Khách';
+    _isChatSidebarOpen = _isLoggedIn;
+  }
+
+  Future<void> _runWithLoading(Future<void> Function() job) async {
+    _isLoading = true;
+    notifyListeners();
+    try {
+      await job();
+    } catch (e) {
+      debugPrint('Lỗi tải dữ liệu: $e');
+    } finally {
+      _isLoading = false;
+      notifyListeners();
+    }
+  }
+
+  // --- XÁC THỰC (UI bắt lỗi và hiển thị message tiếng Việt) ---
   Future<void> registerAccount({
     required String fullName,
     required String email,
     required String password,
   }) async {
-    final data = await _apiService.register(
-      fullName: fullName,
-      email: email,
-      password: password,
-    );
-    _applyAuthSuccess(data);
+    await _auth.signUp(fullName: fullName, email: email, password: password);
+    await loadEvents();
   }
 
   Future<void> loginAccount({
     required String email,
     required String password,
   }) async {
-    final data = await _apiService.login(
-      email: email,
-      password: password,
-    );
-    _applyAuthSuccess(data);
-  }
-
-  void _applyAuthSuccess(Map<String, dynamic> data) {
-    final token = data['access_token'] as String;
-    final user = data['user'] as Map<String, dynamic>;
-    _apiService.setToken(token);
-    _isLoggedIn = true;
-    _userName = user['full_name'] ?? 'Người dùng';
-    _userEmail = user['email'] ?? '';
-    _isChatSidebarOpen = true;
-    loadEvents(); // Tự động tải lịch riêng của tài khoản này
+    await _auth.signIn(email: email, password: password);
+    await loadEvents();
   }
 
   Future<void> changeUserPassword({
     required String oldPassword,
     required String newPassword,
   }) async {
-    await _apiService.changePassword(
-      oldPassword: oldPassword,
-      newPassword: newPassword,
-    );
+    await _auth.changePassword(oldPassword: oldPassword, newPassword: newPassword);
   }
 
-  void logoutToGuestMode() {
-    _apiService.setToken(null);
-    _isLoggedIn = false;
-    _isChatSidebarOpen = false;
-    loadEvents(); // Tải lại lịch của Chế độ Khách
+  Future<void> logoutToGuestMode() async {
+    chatMessages.removeRange(1, chatMessages.length); // giữ lại lời chào đầu
+    await _auth.signOutToGuest();
+    await loadEvents();
   }
 
-  // --- HÀNH ĐỘNG GIAO DIỆN (THEME & SIDEBAR) ---
+  // --- GIAO DIỆN (THEME & SIDEBAR) ---
   void setThemeMode(ThemeMode mode) {
     _themeMode = mode;
     notifyListeners();
@@ -149,27 +176,37 @@ class CalendarProvider extends ChangeNotifier {
     notifyListeners();
   }
 
-  // --- QUẢN LÝ DANH MỤC (CATEGORIES) ---
+  // --- DANH MỤC (lưu lên cloud) ---
   void toggleCategoryVisibility(String name) {
     final idx = _categories.indexWhere((c) => c.name == name);
-    if (idx != -1) {
-      _categories[idx].isVisible = !_categories[idx].isVisible;
-      notifyListeners();
-    }
+    if (idx == -1) return;
+    final cat = _categories[idx];
+    cat.isVisible = !cat.isVisible;
+    notifyListeners();
+    _categoryRepo
+        .setVisible(cat.id, cat.isVisible)
+        .catchError((e) => debugPrint('Lỗi lưu danh mục: $e'));
   }
 
   void selectAllCategories() {
-    for (var c in _categories) {
+    for (final c in _categories) {
       c.isVisible = true;
     }
     notifyListeners();
+    _categoryRepo.showAll().catchError((e) => debugPrint('Lỗi lưu danh mục: $e'));
   }
 
-  void addCategory(String name, Color color) {
-    if (name.trim().isEmpty) return;
-    if (_categories.any((c) => c.name.toLowerCase() == name.trim().toLowerCase())) return;
-    _categories.add(CategoryModel(name: name.trim(), color: color));
-    notifyListeners();
+  Future<void> addCategory(String name, Color color) async {
+    final clean = name.trim();
+    if (clean.isEmpty) return;
+    if (_categories.any((c) => c.name.toLowerCase() == clean.toLowerCase())) return;
+    try {
+      final created = await _categoryRepo.add(clean, color);
+      _categories.add(created);
+      notifyListeners();
+    } catch (e) {
+      debugPrint('Lỗi tạo danh mục: $e');
+    }
   }
 
   // --- ĐIỀU HƯỚNG LỊCH TUẦN ---
@@ -197,26 +234,7 @@ class CalendarProvider extends ChangeNotifier {
     notifyListeners();
   }
 
-  // --- GỌI API CRUD SỰ KIỆN ---
-  Future<void> loadEvents() async {
-    _isLoading = true;
-    notifyListeners();
-    try {
-      _allEvents = await _apiService.fetchEvents();
-      // Tự động bổ sung danh mục nếu sự kiện từ server có danh mục mới
-      for (var ev in _allEvents) {
-        if (!_categories.any((c) => c.name == ev.category)) {
-          _categories.add(CategoryModel(name: ev.category, color: const Color(0xFF9333EA)));
-        }
-      }
-    } catch (e) {
-      debugPrint('Lỗi tải lịch: $e');
-    } finally {
-      _isLoading = false;
-      notifyListeners();
-    }
-  }
-
+  // --- CRUD SỰ KIỆN (lỗi được ném lên cho UI hiển thị) ---
   Future<void> addNewEvent({
     required String title,
     required DateTime startTime,
@@ -224,11 +242,11 @@ class CalendarProvider extends ChangeNotifier {
     required String category,
     String description = '',
   }) async {
-    final created = await _apiService.createEvent(
+    final created = await _eventRepo.create(
       title: title,
       startTime: startTime,
       endTime: endTime,
-      category: category,
+      categoryId: _categoryIdByName(category),
       description: description,
     );
     _allEvents.add(created);
@@ -236,19 +254,19 @@ class CalendarProvider extends ChangeNotifier {
   }
 
   Future<void> editEvent({
-    required int id,
+    required String id,
     required String title,
     required DateTime startTime,
     required DateTime endTime,
     required String category,
     String description = '',
   }) async {
-    final updated = await _apiService.updateEvent(
+    final updated = await _eventRepo.update(
       id: id,
       title: title,
       startTime: startTime,
       endTime: endTime,
-      category: category,
+      categoryId: _categoryIdByName(category),
       description: description,
     );
     final idx = _allEvents.indexWhere((e) => e.id == id);
@@ -258,12 +276,13 @@ class CalendarProvider extends ChangeNotifier {
     }
   }
 
-  Future<void> removeEvent(int id) async {
-    await _apiService.deleteEvent(id);
+  Future<void> removeEvent(String id) async {
+    await _eventRepo.delete(id);
     _allEvents.removeWhere((e) => e.id == id);
     notifyListeners();
   }
 
+  // --- CHAT AI (vẫn là mock, sẽ nối Edge Function ở bước sau) ---
   void sendUserChatMessage(String text) {
     if (text.trim().isEmpty) return;
     chatMessages.add({'isUser': true, 'text': text});
