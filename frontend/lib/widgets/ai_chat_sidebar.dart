@@ -1,5 +1,7 @@
 import 'package:flutter/material.dart';
+import 'package:intl/intl.dart';
 import 'package:provider/provider.dart';
+import '../models/ai_suggestion_model.dart';
 import '../providers/calendar_provider.dart';
 
 class AiChatSidebar extends StatefulWidget {
@@ -16,6 +18,16 @@ class _AiChatSidebarState extends State<AiChatSidebar> {
     if (_controller.text.trim().isEmpty) return;
     provider.sendUserChatMessage(_controller.text);
     _controller.clear();
+  }
+
+  static const List<String> _weekdays = [
+    'Thứ Hai', 'Thứ Ba', 'Thứ Tư', 'Thứ Năm', 'Thứ Sáu', 'Thứ Bảy', 'Chủ nhật',
+  ];
+
+  String _formatRange(DateTime s, DateTime e) {
+    final day = '${_weekdays[s.weekday - 1]}, ${DateFormat('dd/MM').format(s)}';
+    final time = DateFormat('HH:mm');
+    return '$day · ${time.format(s)} – ${time.format(e)}';
   }
 
   @override
@@ -61,14 +73,40 @@ class _AiChatSidebarState extends State<AiChatSidebar> {
           ),
           const Divider(height: 1),
 
-          // Danh sách tin nhắn & Thẻ đề xuất sự kiện
+          // Danh sách tin nhắn & các gợi ý khung giờ do AI đề xuất
           Expanded(
             child: ListView.builder(
               padding: const EdgeInsets.all(16),
-              itemCount: provider.chatMessages.length,
+              itemCount: provider.chatMessages.length + (provider.isAiThinking ? 1 : 0),
               itemBuilder: (context, index) {
+                // Dòng "đang suy nghĩ" ở cuối danh sách
+                if (index == provider.chatMessages.length) {
+                  return Padding(
+                    padding: const EdgeInsets.only(bottom: 10),
+                    child: Row(
+                      children: [
+                        const SizedBox(
+                          width: 16,
+                          height: 16,
+                          child: CircularProgressIndicator(strokeWidth: 2),
+                        ),
+                        const SizedBox(width: 10),
+                        Text(
+                          'Đang tìm khung giờ phù hợp...',
+                          style: TextStyle(
+                            fontSize: 12.5,
+                            color: isDark ? Colors.white70 : Colors.black54,
+                          ),
+                        ),
+                      ],
+                    ),
+                  );
+                }
+
                 final msg = provider.chatMessages[index];
                 final isUser = msg['isUser'] as bool;
+                final suggestions =
+                    (msg['suggestions'] as List<AiSuggestion>?) ?? const <AiSuggestion>[];
 
                 return Column(
                   crossAxisAlignment:
@@ -94,10 +132,11 @@ class _AiChatSidebarState extends State<AiChatSidebar> {
                       ),
                     ),
 
-                    // Thẻ xác nhận tạo lịch thông minh (Suggested Event Card)
-                    if (msg['suggestedTitle'] != null)
+                    // Mỗi khung giờ trống là một thẻ riêng, bấm Schedule để tạo sự kiện thật
+                    for (final s in suggestions)
                       Container(
-                        margin: const EdgeInsets.only(bottom: 14),
+                        width: double.infinity,
+                        margin: const EdgeInsets.only(bottom: 10),
                         padding: const EdgeInsets.all(14),
                         decoration: BoxDecoration(
                           color: isDark ? const Color(0xFF0F172A) : Colors.white,
@@ -108,7 +147,7 @@ class _AiChatSidebarState extends State<AiChatSidebar> {
                           crossAxisAlignment: CrossAxisAlignment.start,
                           children: [
                             Text(
-                              msg['suggestedTitle'] as String,
+                              s.title,
                               style: TextStyle(
                                 fontWeight: FontWeight.bold,
                                 fontSize: 15,
@@ -116,33 +155,25 @@ class _AiChatSidebarState extends State<AiChatSidebar> {
                               ),
                             ),
                             const SizedBox(height: 4),
-                            const Text(
-                              'Thứ Sáu, 14:00 – 16:00',
-                              style: TextStyle(fontSize: 12.5, color: Colors.grey),
+                            Text(
+                              _formatRange(s.start, s.end),
+                              style: const TextStyle(fontSize: 12.5, color: Colors.grey),
                             ),
                             const SizedBox(height: 12),
-                            Row(
-                              children: [
-                                FilledButton(
-                                  onPressed: () {
-                                    final now = provider.focusedDate;
-                                    provider.addNewEvent(
-                                      title: msg['suggestedTitle'] as String,
-                                      startTime: DateTime(now.year, now.month, now.day, 14, 0),
-                                      endTime: DateTime(now.year, now.month, now.day, 16, 0),
-                                      category: 'Công việc',
-                                    );
-                                  },
-                                  child: const Text('Schedule'),
-                                ),
-                                const SizedBox(width: 10),
-                                TextButton(
-                                  onPressed: () {},
-                                  child: const Text('Cancel'),
-                                ),
-                              ],
+                            FilledButton(
+                              onPressed: () => provider.acceptAiSuggestion(msg, s),
+                              child: const Text('Schedule'),
                             ),
                           ],
+                        ),
+                      ),
+
+                    if (suggestions.isNotEmpty)
+                      Padding(
+                        padding: const EdgeInsets.only(bottom: 14),
+                        child: TextButton(
+                          onPressed: () => provider.dismissAiSuggestions(msg),
+                          child: const Text('Cancel'),
                         ),
                       ),
                   ],

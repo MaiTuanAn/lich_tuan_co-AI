@@ -1,13 +1,16 @@
 import 'package:flutter/material.dart';
 import 'package:syncfusion_flutter_calendar/calendar.dart';
 import '../models/category_model.dart';
+import '../models/ai_suggestion_model.dart';
 import '../models/event_model.dart';
+import '../services/ai_service.dart';
 import '../services/auth_service.dart';
 import '../services/category_repository.dart';
 import '../services/event_repository.dart';
 
 class CalendarProvider extends ChangeNotifier {
   final AuthService _auth = AuthService();
+  final AiService _ai = AiService();
   final EventRepository _eventRepo = EventRepository();
   final CategoryRepository _categoryRepo = CategoryRepository();
   final CalendarController calendarController = CalendarController();
@@ -20,6 +23,7 @@ class CalendarProvider extends ChangeNotifier {
   ThemeMode _themeMode = ThemeMode.light;
   bool _isChatSidebarOpen = false;
   bool _isLoading = false;
+  bool _isAiThinking = false;
   DateTime _focusedDate = DateTime.now();
 
   // 2. Cấu hình Cài đặt (Settings State) - chưa lưu lên cloud, sẽ làm ở bước sau
@@ -60,6 +64,7 @@ class CalendarProvider extends ChangeNotifier {
   bool get isDarkMode => _themeMode == ThemeMode.dark;
   bool get isChatSidebarOpen => _isLoggedIn && _isChatSidebarOpen;
   bool get isLoading => _isLoading;
+  bool get isAiThinking => _isAiThinking;
   DateTime get focusedDate => _focusedDate;
   List<CategoryModel> get categories => _categories;
 
@@ -282,20 +287,73 @@ class CalendarProvider extends ChangeNotifier {
     notifyListeners();
   }
 
-  // --- CHAT AI (vẫn là mock, sẽ nối Edge Function ở bước sau) ---
-  void sendUserChatMessage(String text) {
-    if (text.trim().isEmpty) return;
-    chatMessages.add({'isUser': true, 'text': text});
+  // --- CHAT AI (gọi Edge Function ai-chat -> Gemini + thuật toán tìm giờ trống) ---
+  int get _defaultDurationMinutes =>
+      int.tryParse(defaultDuration.split(' ').first) ?? 60;
+
+  Future<void> sendUserChatMessage(String text) async {
+    final clean = text.trim();
+    if (clean.isEmpty || _isAiThinking) return;
+
+    chatMessages.add({'isUser': true, 'text': clean});
+    _isAiThinking = true;
     notifyListeners();
 
-    Future.delayed(const Duration(milliseconds: 500), () {
+    try {
+      final reply = await _ai.ask(
+        message: clean,
+        events: _allEvents,
+        categories: _categories.map((c) => c.name).toList(),
+        defaultDurationMinutes: _defaultDurationMinutes,
+        style: aiResponseStyle,
+      );
       chatMessages.add({
         'isUser': false,
-        'text': 'Tôi đã tìm thấy khung giờ trống phù hợp cho "$text". Bạn có muốn lên lịch ngay không?',
-        'suggestedTitle': text,
+        'text': reply.text,
+        if (reply.suggestions.isNotEmpty) 'suggestions': reply.suggestions,
       });
+    } catch (e) {
+      chatMessages.add({
+        'isUser': false,
+        'text': 'Xin lỗi, ${e.toString().replaceAll('Exception: ', '')}',
+      });
+    } finally {
+      _isAiThinking = false;
       notifyListeners();
-    });
+    }
+  }
+
+  /// Người dùng bấm "Schedule" trên một gợi ý: tạo sự kiện thật.
+  /// Database vẫn kiểm tra trùng lịch lần cuối (phòng khi lịch vừa thay đổi).
+  Future<void> acceptAiSuggestion(
+    Map<String, dynamic> message,
+    AiSuggestion suggestion,
+  ) async {
+    try {
+      await addNewEvent(
+        title: suggestion.title,
+        startTime: suggestion.start,
+        endTime: suggestion.end,
+        category: suggestion.category,
+      );
+      message.remove('suggestions');
+      chatMessages.add({
+        'isUser': false,
+        'text': 'Đã thêm "${suggestion.title}" vào lịch của bạn.',
+      });
+    } catch (e) {
+      chatMessages.add({
+        'isUser': false,
+        'text': 'Chưa thêm được: ${e.toString().replaceAll('Exception: ', '')}',
+      });
+    }
+    notifyListeners();
+  }
+
+  /// Người dùng bấm "Cancel": bỏ các gợi ý của tin nhắn này.
+  void dismissAiSuggestions(Map<String, dynamic> message) {
+    message.remove('suggestions');
+    notifyListeners();
   }
 
   void notifySettingsUpdated() {
